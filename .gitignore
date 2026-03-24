@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.venv/
+cloud_service/dms_cloud.db
