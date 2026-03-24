@@ -8,6 +8,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QTableWidget>
+#include <QAbstractItemView>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -24,6 +25,9 @@ public:
         table_ = new QTableWidget(0, 7);
         table_->setHorizontalHeaderLabels({"Time", "Device", "Level", "Code", "Score", "Latency", "Reason"});
         table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+        table_->setSelectionMode(QAbstractItemView::SingleSelection);
 
         layout->addWidget(statusLabel_);
         layout->addWidget(table_);
@@ -54,6 +58,8 @@ private slots:
             }
 
             const QJsonArray arr = doc.array();
+            table_->setUpdatesEnabled(false);
+            table_->clearContents();
             table_->setRowCount(arr.size());
             statusLabel_->setText(QString("最近告警: %1 条").arg(arr.size()));
 
@@ -69,6 +75,7 @@ private slots:
                 table_->setItem(row, 6, new QTableWidgetItem(obj.value("reason").toString()));
                 row++;
             }
+            table_->setUpdatesEnabled(true);
             reply->deleteLater();
         });
     }
