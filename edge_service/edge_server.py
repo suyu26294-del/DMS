@@ -5,14 +5,21 @@ import asyncio
 from collections import deque
 import json
 import os
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict, Optional, Protocol
 
 
 from proto.messages import AlertEvent, AlertLevel, FramePacket, ImuPacket, now_ms
 
-CLOUD_URL = os.getenv("CLOUD_URL", "http://127.0.0.1:8000")
 EDGE_HOST = os.getenv("EDGE_HOST", "0.0.0.0")
 EDGE_PORT = int(os.getenv("EDGE_PORT", "9000"))
+EDGE_UPLINK = os.getenv("EDGE_UPLINK", "http").lower()
+CLOUD_URL = os.getenv("CLOUD_URL", "http://127.0.0.1:8000")
+MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_USERNAME = os.getenv("MQTT_USERNAME", "")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
+MQTT_ALERT_TOPIC = os.getenv("MQTT_ALERT_TOPIC", "/dms/alerts")
+MQTT_STATUS_TOPIC = os.getenv("MQTT_STATUS_TOPIC", "/dms/status")
 
 
 class FusionContext:
@@ -60,9 +67,73 @@ class FusionContext:
         )
 
 
+class Uplink(Protocol):
+    async def send_alert(self, event: AlertEvent) -> None:
+        ...
+
+    async def send_status(self, payload: dict) -> None:
+        ...
+
+
+class HttpUplink:
+    async def _post_json(self, url: str, payload: dict) -> None:
+        import urllib.request
+
+        def _post() -> None:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=2.0):
+                return
+
+        await asyncio.to_thread(_post)
+
+    async def send_alert(self, event: AlertEvent) -> None:
+        await self._post_json(f"{CLOUD_URL}/alerts", event.to_dict())
+
+    async def send_status(self, payload: dict) -> None:
+        await self._post_json(f"{CLOUD_URL}/status", payload)
+
+
+class MqttUplink:
+    async def _publish(self, topic: str, payload: dict) -> None:
+        import paho.mqtt.publish
+
+        auth = None
+        if MQTT_USERNAME:
+            auth = {"username": MQTT_USERNAME, "password": MQTT_PASSWORD}
+
+        def _pub() -> None:
+            paho.mqtt.publish.single(
+                topic,
+                payload=json.dumps(payload, ensure_ascii=False),
+                hostname=MQTT_HOST,
+                port=MQTT_PORT,
+                qos=1,
+                auth=auth,
+            )
+
+        await asyncio.to_thread(_pub)
+
+    async def send_alert(self, event: AlertEvent) -> None:
+        await self._publish(MQTT_ALERT_TOPIC, event.to_dict())
+
+    async def send_status(self, payload: dict) -> None:
+        await self._publish(MQTT_STATUS_TOPIC, payload)
+
+
 class EdgeServer:
     def __init__(self) -> None:
         self.device_ctx: Dict[str, FusionContext] = {}
+        self.uplink: Uplink
+        if EDGE_UPLINK == "mqtt":
+            self.uplink = MqttUplink()
+        else:
+            self.uplink = HttpUplink()
 
     async def handle_conn(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         while not reader.at_eof():
@@ -90,38 +161,22 @@ class EdgeServer:
         writer.close()
         await writer.wait_closed()
 
-    async def _post_json(self, url: str, payload: dict) -> None:
-        import urllib.request
-
-        def _post() -> None:
-            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=2.0):
-                return
-
-        await asyncio.to_thread(_post)
-
     async def send_alert(self, event: AlertEvent) -> None:
         try:
-            await self._post_json(f"{CLOUD_URL}/alerts", event.to_dict())
+            await self.uplink.send_alert(event)
             print(f"[edge] alert => {event.code} latency={event.latency_ms}ms score={event.score:.2f}")
         except Exception as exc:  # noqa: BLE001
             print(f"[edge] push alert failed: {exc}")
 
     async def send_status(self, payload: dict) -> None:
         try:
-            await self._post_json(f"{CLOUD_URL}/status", payload)
+            await self.uplink.send_status(payload)
         except Exception as exc:  # noqa: BLE001
             print(f"[edge] push status failed: {exc}")
 
     async def run(self) -> None:
         server = await asyncio.start_server(self.handle_conn, EDGE_HOST, EDGE_PORT)
-        print(f"[edge] listening on {EDGE_HOST}:{EDGE_PORT}")
+        print(f"[edge] listening on {EDGE_HOST}:{EDGE_PORT}, uplink={EDGE_UPLINK}")
         async with server:
             await server.serve_forever()
 

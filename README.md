@@ -73,7 +73,7 @@
 - 告警生成：
   - 阈值默认 `0.68`。
   - 冷却窗口 `1200ms` 防止重复报警风暴。
-- 输出：推送到云端 `/alerts` 与 `/status`。
+- 输出：推送到云端 `/alerts` 与 `/status`，或通过 MQTT（阿里云 IoT）上报。
 
 ---
 
@@ -88,6 +88,7 @@
 - `GET /health`：健康检查。
 
 数据库使用本地 SQLite（`cloud_service/dms_cloud.db`），方便联调和演示。
+同时支持启用 MQTT worker 直接消费 `/dms/alerts` 与 `/dms/status` 主题。
 
 ---
 
@@ -123,6 +124,12 @@ uvicorn cloud_service.app:app --host 0.0.0.0 --port 8000
 python edge_service/edge_server.py
 ```
 
+如需 MQTT 上报：
+
+```bash
+EDGE_UPLINK=mqtt MQTT_HOST=<broker> MQTT_PORT=1883 python edge_service/edge_server.py
+```
+
 ### 7.4 启动设备模拟器
 
 ```bash
@@ -133,6 +140,16 @@ python tools/device_simulator.py
 
 - `http://127.0.0.1:8000/alerts`
 - `http://127.0.0.1:8000/status/latest`
+
+---
+
+## 11. 实装部署与架构图
+
+见 `docs/deployment_zh.md`，包含：
+
+- 项目实例图（端-边-云）
+- 云端图（阿里云 MQTT + 云端入库）
+- Qt 图（拉取与渲染链路）
 
 ---
 
